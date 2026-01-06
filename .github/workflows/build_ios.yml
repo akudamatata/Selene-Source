@@ -65,6 +65,17 @@ jobs:
         mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
         cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
 
+    - name: Inject Team ID
+      env:
+        TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+      run: |
+        # Inject Team ID into ExportOptions.plist
+        sed -i '' "s/TEAM_ID_PLACEHOLDER/$TEAM_ID/g" ios/ExportOptions.plist
+        
+        # Inject Development Team into Release.xcconfig to satisfy Xcode
+        echo "" >> ios/Flutter/Release.xcconfig
+        echo "DEVELOPMENT_TEAM = $TEAM_ID" >> ios/Flutter/Release.xcconfig
+
     - name: Build iOS IPA
       run: flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
 
