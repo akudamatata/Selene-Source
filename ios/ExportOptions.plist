@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>method</key>
-	<string>development</string>
+	<string>ad-hoc</string>
 	<key>teamID</key>
 	<string>TEAM_ID_PLACEHOLDER</string>
 	<key>compileBitcode</key>
