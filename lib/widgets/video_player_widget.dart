@@ -478,7 +478,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     _vpController = null;
     _mkPlayer = null;
     _mkController = null;
-    _videoController = null;
+
   }
 
   @override
@@ -552,7 +552,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
           currentEpisodeIndex: widget.currentEpisodeIndex,
           totalEpisodes: widget.totalEpisodes,
           sourceName: widget.sourceName,
-          onExitFullScreen: widget.onExitFullScreen,
+
           live: widget.live,
           playbackSpeedListenable: _playbackSpeed,
           onSetSpeed: _setPlaybackSpeed,
@@ -617,7 +617,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
                 currentEpisodeIndex: widget.currentEpisodeIndex,
                 totalEpisodes: widget.totalEpisodes,
                 sourceName: widget.sourceName,
-                onExitFullScreen: widget.onExitFullScreen,
+
                 live: widget.live,
                 playbackSpeedListenable: _playbackSpeed,
                 onSetSpeed: _setPlaybackSpeed,
