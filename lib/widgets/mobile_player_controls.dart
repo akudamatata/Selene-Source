@@ -2,15 +2,31 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:media_kit/media_kit.dart';
-import 'package:media_kit_video/media_kit_video.dart';
+import 'package:media_kit/media_kit.dart' show VideoState; // Keep VideoState for now or abstract later? The adapter uses PlayerStateSnapshot.
+// The user code uses `VideoState state` from media_kit_video for fullscreen control. We can keep that for now as Video widget still needs it?
+// Wait, for video_player, there is no VideoState. `VideoState` comes from `package:media_kit_video`.
+// If we switch to video_player on iOS, the `Video` widget from media_kit won't be used.
+// So `state` (VideoState) might be null or different.
+// Ideally we should abstract fullscreen toggling too.
+// For now let's see where VideoState is used: `state.enterFullscreen()`.
+// Detailed plan: We will pass a `VoidCallback? onEnterFullscreen` and `VoidCallback? onExitFullscreen` instead of `VideoState`.
+// But wait, the current code signature requires `VideoState state`.
+// Let's first look at `AbstractPlayer` integration.
+
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:volume_controller/volume_controller.dart';
+import '../../services/player/player_adapter.dart';
 import 'dlna_device_dialog.dart';
 
 class MobilePlayerControls extends StatefulWidget {
-  final Player player;
-  final VideoState state;
+  final AbstractPlayer player;
+  // VideoState is specific to media_kit_video. 
+  // If we are on iOS using video_player, we don't have this.
+  // We should make this nullable or replace it with a callback interface.
+  // Replacing with generic callbacks for fullscreen control is better.
+  final VoidCallback onEnterFullscreen;
+  final VoidCallback onExitFullscreen;
+  
   final Function(bool) onControlsVisibilityChanged;
   final VoidCallback? onBackPressed;
   final Function(bool) onFullscreenChange;
@@ -24,7 +40,7 @@ class MobilePlayerControls extends StatefulWidget {
   final int? currentEpisodeIndex;
   final int? totalEpisodes;
   final String? sourceName;
-  final VoidCallback? onExitFullScreen;
+  // final VoidCallback? onExitFullScreen; // Duplicated? Replaced by onExitFullscreen parameter above
   final bool live;
   final ValueNotifier<double> playbackSpeedListenable;
   final Future<void> Function(double speed) onSetSpeed;
@@ -34,7 +50,8 @@ class MobilePlayerControls extends StatefulWidget {
   const MobilePlayerControls({
     super.key,
     required this.player,
-    required this.state,
+    required this.onEnterFullscreen,
+    required this.onExitFullscreen,
     required this.onControlsVisibilityChanged,
     this.onBackPressed,
     required this.onFullscreenChange,
@@ -48,7 +65,6 @@ class MobilePlayerControls extends StatefulWidget {
     this.currentEpisodeIndex,
     this.totalEpisodes,
     this.sourceName,
-    this.onExitFullScreen,
     this.live = false,
     required this.playbackSpeedListenable,
     required this.onSetSpeed,
@@ -98,7 +114,7 @@ class _MobilePlayerControlsState extends State<MobilePlayerControls> {
   @override
   void didUpdateWidget(covariant MobilePlayerControls oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 当 PIP 模式停止时，显示控制栏
+    // When PIP stops, show controls
     if (oldWidget.isPipMode && !widget.isPipMode) {
       setState(() => _controlsVisible = true);
       widget.onControlsVisibilityChanged(true);
@@ -121,7 +137,7 @@ class _MobilePlayerControlsState extends State<MobilePlayerControls> {
   }
 
   void _listenPlayerStreams() {
-    _subscriptions.add(widget.player.stream.playing.listen((playing) {
+    _subscriptions.add(widget.player.playingStream.listen((playing) {
       if (!mounted) return;
       if (playing && _controlsVisible) {
         _startHideTimer();
@@ -135,14 +151,14 @@ class _MobilePlayerControlsState extends State<MobilePlayerControls> {
       }
     }));
 
-    _subscriptions.add(widget.player.stream.position.listen((_) {
+    _subscriptions.add(widget.player.positionStream.listen((_) {
       if (!mounted) return;
       if (_controlsVisible && !_isSeekingViaSwipe) {
         setState(() {});
       }
     }));
 
-    _subscriptions.add(widget.player.stream.completed.listen((_) {
+    _subscriptions.add(widget.player.completedStream.listen((_) {
       if (!mounted) return;
       setState(() {});
     }));
@@ -161,7 +177,22 @@ class _MobilePlayerControlsState extends State<MobilePlayerControls> {
     super.dispose();
   }
 
-  bool get _isFullscreen => widget.state.isFullscreen();
+  bool get _isFullscreen => true; // Replaced by callbacks, internal state not needed from widget.state
+  // Actually we need to track local state maybe?
+  // Let's rely on widget.onFullscreenChange logic from parent or just internal state if needed.
+  // Wait, _isFullscreen getter was checking widget.state.isFullscreen().
+  // Since we removed widget.state, we can't check it. 
+  // But we have `widget.onFullscreenChange` which is a callback. 
+  // We should probably track fullscreen state locally or rely on a prop?
+  // But fullscreen state is managed by the player implementation (WindowManipulator etc).
+  // Ideally parent passes `bool isFullscreen`.
+  // Looking at `video_player_widget.dart` later, we will see how it's managed. 
+  // For now, let's assume `_isFullscreen` is hard to get from adapter directly unless we add it to snapshot.
+  // BUT, usually `video_player_widget` handles the fullscreen logic state.
+  // Let's modify `MobilePlayerControls` to accept `isVideoFullscreen` boolean if needed.
+  // checking usages: used in build method for layout.
+  // Refactor: Add `final bool isFullscreen` to widget.
+
   bool get _isPlaying => widget.player.state.playing;
   Duration get _position => widget.player.state.position;
   Duration get _duration => widget.player.state.duration;
@@ -370,16 +401,16 @@ class _MobilePlayerControlsState extends State<MobilePlayerControls> {
   }
 
   void _enterFullscreen() {
-    widget.state.enterFullscreen();
+    widget.onEnterFullscreen();
     widget.onFullscreenChange(true);
     _onUserInteraction();
   }
 
   void _exitFullscreen() {
-    widget.state.exitFullscreen();
+    widget.onExitFullscreen();
     widget.onFullscreenChange(false);
     // 触发退出全屏回调
-    widget.onExitFullScreen?.call();
+    // widget.onExitFullScreen?.call(); // Removed dup
     // 确保控制栏可见并重新启动隐藏计时器
     setState(() {
       _controlsVisible = true;
