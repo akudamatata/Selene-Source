@@ -79,6 +79,9 @@ jobs:
     - name: Build iOS IPA
       run: flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
 
+    - name: List Build Directory
+      run: ls -R build
+
     - name: Upload IPA Artifact
       uses: actions/upload-artifact@v4
       with:
