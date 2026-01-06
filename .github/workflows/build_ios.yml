@@ -36,20 +36,41 @@ jobs:
         cd ios
         pod install
         cd ..
-        
-    - name: Build iOS (No Codesign)
+    - name: Install Certificate and Profile
+      env:
+        BUILD_CERTIFICATE_BASE64: ${{ secrets.IOS_BUILD_CERTIFICATE_BASE64 }}
+        P12_PASSWORD: ${{ secrets.IOS_BUILD_CERTIFICATE_PASSWORD }}
+        BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        KEYCHAIN_PASSWORD: "admin"
       run: |
-        flutter build ios --release --no-codesign
+        # Create variables
+        CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+        PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+        KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
 
-    - name: Create Payload directory (Unsigned IPA)
-      run: |
-        mkdir Payload
-        mv build/ios/iphoneos/Runner.app Payload/
-        zip -r release.ipa Payload
+        # Import certificate and provisioning profile from secrets
+        echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+        echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o $PP_PATH
 
-    - name: Upload IPA
-      uses: actions/upload-artifact@v4
+        # Create temporary keychain
+        security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+        security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+        # Import certificate to keychain
+        security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+        security list-keychain -d user -s $KEYCHAIN_PATH
+
+        # Apply provisioning profile
+        mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+        cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
+
+    - name: Build iOS IPA
+      run: flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
+
+    - name: Upload IPA Artifact
+      uses: actions/upload-artifact@v3
       with:
-        name: ios-unsigned-ipa
-        path: release.ipa
+        name: ios-signed-ipa
+        path: build/ios/ipa/*.ipa
         retention-days: 5
