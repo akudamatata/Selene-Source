@@ -1152,7 +1152,7 @@ class _MobilePlayerControlsState extends State<MobilePlayerControls> {
 }
 
 class _MobileVideoProgressBar extends StatefulWidget {
-  final Player player;
+  final AbstractPlayer player;
   final VoidCallback? onDragStart;
   final VoidCallback? onDragEnd;
   final VoidCallback? onDragUpdate;
@@ -1186,7 +1186,7 @@ class _MobileVideoProgressBarState extends State<_MobileVideoProgressBar> {
   @override
   void initState() {
     super.initState();
-    _positionSubscription = widget.player.stream.position.listen((_) {
+    _positionSubscription = widget.player.positionStream.listen((_) {
       if (mounted && !_isDragging && !_isSeeking) {
         setState(() {});
       }
