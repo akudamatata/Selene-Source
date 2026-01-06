@@ -86,5 +86,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: ios-signed-ipa
-        path: build/ios/ipa/*.ipa
+        path: build/ios/**/*.ipa
         retention-days: 5
