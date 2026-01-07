@@ -10,5 +10,12 @@
 	<false/>
 	<key>thinning</key>
 	<string>&lt;none&gt;</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>org.moontechlab.selene</key>
+		<string>PROFILE_NAME_PLACEHOLDER</string>
+	</dict>
 </dict>
 </plist>

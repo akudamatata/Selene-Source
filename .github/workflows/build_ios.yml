@@ -69,6 +69,11 @@ jobs:
       env:
         TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
       run: |
+        # Inject Provisioning Profile Name into ExportOptions.plist
+        PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+        PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print Name" /dev/stdin <<< $(security cms -D -i $PP_PATH)) 
+        sed -i '' "s/PROFILE_NAME_PLACEHOLDER/$PROFILE_NAME/g" ios/ExportOptions.plist
+
         # Inject Team ID into ExportOptions.plist
         sed -i '' "s/TEAM_ID_PLACEHOLDER/$TEAM_ID/g" ios/ExportOptions.plist
         
