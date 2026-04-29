@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:awesome_video_player/awesome_video_player.dart' as awesome;
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -73,20 +74,47 @@ class VideoPlayerWidgetController {
   }
 
   Future<void> seekTo(Duration position) async {
+    if (_state._usesAwesomePlayer) {
+      await _state._awesomeController?.seekTo(position);
+      return;
+    }
     await _state._player?.seek(position);
   }
 
-  Duration? get currentPosition => _state._player?.state.position;
+  Duration? get currentPosition {
+    if (_state._usesAwesomePlayer) {
+      return _state._awesomeController?.videoPlayerController?.value.position;
+    }
+    return _state._player?.state.position;
+  }
 
-  Duration? get duration => _state._player?.state.duration;
+  Duration? get duration {
+    if (_state._usesAwesomePlayer) {
+      return _state._awesomeController?.videoPlayerController?.value.duration;
+    }
+    return _state._player?.state.duration;
+  }
 
-  bool get isPlaying => _state._player?.state.playing ?? false;
+  bool get isPlaying {
+    if (_state._usesAwesomePlayer) {
+      return _state._awesomeController?.isPlaying() ?? false;
+    }
+    return _state._player?.state.playing ?? false;
+  }
 
   Future<void> pause() async {
+    if (_state._usesAwesomePlayer) {
+      await _state._awesomeController?.pause();
+      return;
+    }
     await _state._player?.pause();
   }
 
   Future<void> play() async {
+    if (_state._usesAwesomePlayer) {
+      await _state._awesomeController?.play();
+      return;
+    }
     await _state._player?.play();
   }
 
@@ -105,10 +133,22 @@ class VideoPlayerWidgetController {
   double get playbackSpeed => _state._playbackSpeed.value;
 
   Future<void> setVolume(double volume) async {
+    if (_state._usesAwesomePlayer) {
+      final normalizedVolume = (volume / 100).clamp(0.0, 1.0).toDouble();
+      await _state._awesomeController?.setVolume(normalizedVolume);
+      return;
+    }
     await _state._player?.setVolume(volume);
   }
 
-  double? get volume => _state._player?.state.volume;
+  double? get volume {
+    if (_state._usesAwesomePlayer) {
+      final awesomeVolume =
+          _state._awesomeController?.videoPlayerController?.value.volume;
+      return awesomeVolume == null ? null : awesomeVolume * 100;
+    }
+    return _state._player?.state.volume;
+  }
 
   void exitWebFullscreen() {
     _state._exitWebFullscreen();
@@ -123,8 +163,13 @@ class VideoPlayerWidgetController {
 
 class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     with WidgetsBindingObserver {
+  bool get _usesAwesomePlayer => Platform.isIOS;
+
   Player? _player;
   VideoController? _videoController;
+  awesome.BetterPlayerController? _awesomeController;
+  final GlobalKey<State<StatefulWidget>> _awesomePlayerKey =
+      GlobalKey<State<StatefulWidget>>();
   bool _isInitialized = false;
   bool _hasCompleted = false;
   bool _isLoadingVideo = false;
@@ -135,6 +180,9 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
   StreamSubscription<bool>? _playingSubscription;
   StreamSubscription<bool>? _completedSubscription;
   StreamSubscription<Duration>? _durationSubscription;
+  Timer? _awesomeProgressTimer;
+  Duration? _pendingAwesomeStartAt;
+  bool _awesomeReadyNotified = false;
   final ValueNotifier<double> _playbackSpeed = ValueNotifier<double>(1.0);
   bool _playerDisposed = false;
   VoidCallback? _exitWebFullscreenCallback;
@@ -148,8 +196,10 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     _currentUrl = widget.url;
     _currentHeaders = widget.headers;
     _initializePlayer();
-    _setupPip();
-    _registerPipObserver();
+    if (!_usesAwesomePlayer) {
+      _setupPip();
+      _registerPipObserver();
+    }
     widget.onControllerCreated?.call(VideoPlayerWidgetController._(this));
   }
 
@@ -168,6 +218,10 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     if (_playerDisposed) {
       return;
     }
+    if (_usesAwesomePlayer) {
+      _initializeAwesomePlayer();
+      return;
+    }
     _player = Player();
     _videoController = VideoController(_player!);
     _setupPlayerListeners();
@@ -179,7 +233,57 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     });
   }
 
+  void _initializeAwesomePlayer({Duration? startAt}) {
+    _awesomeController = awesome.BetterPlayerController(
+      awesome.BetterPlayerConfiguration(
+        aspectRatio: 16 / 9,
+        autoPlay: true,
+        fit: BoxFit.contain,
+        handleLifecycle: false,
+        autoDispose: false,
+        allowedScreenSleep: false,
+        eventListener: _handleAwesomePlayerEvent,
+        controlsConfiguration: awesome.BetterPlayerControlsConfiguration(
+          controlBarColor: Colors.black.withValues(alpha: 0.75),
+          iconsColor: Colors.white,
+          textColor: Colors.white,
+          progressBarPlayedColor: Colors.red,
+          progressBarHandleColor: Colors.red,
+          progressBarBufferedColor: Colors.white70,
+          progressBarBackgroundColor: Colors.white38,
+          enablePip: true,
+          enablePlaybackSpeed: !widget.live,
+          enableSkips: !widget.live,
+          enableProgressText: !widget.live,
+          enableProgressBar: !widget.live,
+          enableProgressBarDrag: !widget.live,
+          enableQualities: true,
+          enableSubtitles: true,
+          enableAudioTracks: true,
+          enableOverflowMenu: true,
+          backgroundColor: Colors.black,
+          loadingColor: Colors.white,
+        ),
+      ),
+    );
+    _startAwesomeProgressTimer();
+    if (_currentUrl != null) {
+      unawaited(_openCurrentMedia(startAt: startAt));
+    }
+    if (mounted) {
+      setState(() {
+        _isInitialized = true;
+      });
+    } else {
+      _isInitialized = true;
+    }
+  }
+
   Future<void> _openCurrentMedia({Duration? startAt}) async {
+    if (_usesAwesomePlayer) {
+      await _openAwesomeMedia(startAt: startAt);
+      return;
+    }
     if (_playerDisposed || _player == null || _currentUrl == null) {
       return;
     }
@@ -221,13 +325,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     _durationSubscription?.cancel();
 
     _positionSubscription = _player!.stream.position.listen((_) {
-      for (final listener in List<VoidCallback>.from(_progressListeners)) {
-        try {
-          listener();
-        } catch (error) {
-          debugPrint('VideoPlayerWidget: progress listener error $error');
-        }
-      }
+      _notifyProgressListeners();
     });
 
     _playingSubscription = _player!.stream.playing.listen((playing) {
@@ -292,6 +390,15 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
       _currentHeaders = headers;
     }
 
+    if (_usesAwesomePlayer) {
+      if (_awesomeController == null) {
+        _initializeAwesomePlayer(startAt: startAt);
+        return;
+      }
+      await _openAwesomeMedia(startAt: startAt);
+      return;
+    }
+
     if (_player == null) {
       await _initializePlayer();
       return;
@@ -340,9 +447,138 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     _progressListeners.remove(listener);
   }
 
+  void _notifyProgressListeners() {
+    for (final listener in List<VoidCallback>.from(_progressListeners)) {
+      try {
+        listener();
+      } catch (error) {
+        debugPrint('VideoPlayerWidget: progress listener error $error');
+      }
+    }
+  }
+
   Future<void> _setPlaybackSpeed(double speed) async {
     _playbackSpeed.value = speed;
+    if (_usesAwesomePlayer) {
+      await _awesomeController?.setSpeed(speed);
+      return;
+    }
     await _player?.setRate(speed);
+  }
+
+  Future<void> _openAwesomeMedia({Duration? startAt}) async {
+    if (_playerDisposed || _awesomeController == null || _currentUrl == null) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _isLoadingVideo = true;
+      });
+    } else {
+      _isLoadingVideo = true;
+    }
+    _hasCompleted = false;
+    _awesomeReadyNotified = false;
+    _pendingAwesomeStartAt = startAt;
+
+    try {
+      await _awesomeController!.setupDataSource(
+        awesome.BetterPlayerDataSource.network(
+          _currentUrl!,
+          liveStream: widget.live,
+          headers: _currentHeaders ?? const <String, String>{},
+          notificationConfiguration:
+              const awesome.BetterPlayerNotificationConfiguration(
+            showNotification: false,
+          ),
+        ),
+      );
+      await _awesomeController!.setSpeed(_playbackSpeed.value);
+      await _awesomeController!.play();
+    } catch (error) {
+      debugPrint('VideoPlayerWidget: failed to open awesome media $error');
+      if (mounted) {
+        setState(() {
+          _isLoadingVideo = false;
+        });
+      } else {
+        _isLoadingVideo = false;
+      }
+    }
+  }
+
+  void _handleAwesomePlayerEvent(awesome.BetterPlayerEvent event) {
+    final type = event.betterPlayerEventType;
+    if (type == awesome.BetterPlayerEventType.initialized) {
+      _handleAwesomeReady();
+    } else if (type == awesome.BetterPlayerEventType.progress) {
+      _notifyProgressListeners();
+    } else if (type == awesome.BetterPlayerEventType.pause) {
+      widget.onPause?.call();
+    } else if (type == awesome.BetterPlayerEventType.finished) {
+      if (!widget.live && !_hasCompleted) {
+        _hasCompleted = true;
+        widget.onVideoCompleted?.call();
+      }
+    } else if (type == awesome.BetterPlayerEventType.pipStart) {
+      _setPipMode(true);
+    } else if (type == awesome.BetterPlayerEventType.pipStop) {
+      _setPipMode(false);
+    } else if (type == awesome.BetterPlayerEventType.openFullscreen) {
+      widget.onWebFullscreenChanged?.call(true);
+    } else if (type == awesome.BetterPlayerEventType.hideFullscreen) {
+      widget.onWebFullscreenChanged?.call(false);
+      widget.onExitFullScreen?.call();
+    } else if (type == awesome.BetterPlayerEventType.exception) {
+      if (mounted) {
+        setState(() {
+          _isLoadingVideo = false;
+        });
+      } else {
+        _isLoadingVideo = false;
+      }
+    }
+  }
+
+  void _handleAwesomeReady() {
+    if (!mounted || _playerDisposed) {
+      return;
+    }
+    setState(() {
+      _isLoadingVideo = false;
+      _hasCompleted = false;
+      _isInitialized = true;
+    });
+
+    final startAt = _pendingAwesomeStartAt;
+    _pendingAwesomeStartAt = null;
+    if (startAt != null && startAt > Duration.zero) {
+      unawaited(_awesomeController?.seekTo(startAt));
+    }
+    if (!_awesomeReadyNotified) {
+      _awesomeReadyNotified = true;
+      widget.onReady?.call();
+    }
+  }
+
+  void _startAwesomeProgressTimer() {
+    _awesomeProgressTimer?.cancel();
+    _awesomeProgressTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!_playerDisposed && _awesomeController != null) {
+        _notifyProgressListeners();
+      }
+    });
+  }
+
+  void _setPipMode(bool isPipMode) {
+    if (mounted) {
+      setState(() {
+        _isPipMode = isPipMode;
+      });
+    } else {
+      _isPipMode = isPipMode;
+    }
+    widget.onPipModeChanged?.call(isPipMode);
   }
 
   void _exitWebFullscreen() {
@@ -402,6 +638,11 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
   Future<void> _enterPipMode() async {
     debugPrint('_enterPipMode');
     try {
+      if (_usesAwesomePlayer) {
+        await _awesomeController?.play();
+        await _awesomeController?.enablePictureInPicture(_awesomePlayerKey);
+        return;
+      }
       var support = await _pip.isSupported();
       if (!support) {
         debugPrint('Device does not support PiP!');
@@ -431,7 +672,11 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     _playingSubscription?.cancel();
     _completedSubscription?.cancel();
     _durationSubscription?.cancel();
+    _awesomeProgressTimer?.cancel();
     _progressListeners.clear();
+    _awesomeController?.removeEventsListener(_handleAwesomePlayerEvent);
+    _awesomeController?.dispose(forceDispose: true);
+    _awesomeController = null;
     await _player?.dispose();
     _player = null;
     _videoController = null;
@@ -458,7 +703,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    if (Platform.isAndroid || Platform.isIOS) {
+    if (!_usesAwesomePlayer && Platform.isAndroid) {
       _pip.unregisterStateChangedObserver();
       _pip.dispose();
     }
@@ -469,6 +714,9 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
 
   @override
   Widget build(BuildContext context) {
+    if (_usesAwesomePlayer) {
+      return _buildAwesomePlayer();
+    }
     return Container(
       color: Colors.black,
       child: _isInitialized && _videoController != null
@@ -523,6 +771,47 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
                         isPipMode: _isPipMode,
                       );
               },
+            )
+          : const Center(
+              child: CircularProgressIndicator(
+                color: Colors.white,
+              ),
+            ),
+    );
+  }
+
+  Widget _buildAwesomePlayer() {
+    return Container(
+      color: Colors.black,
+      child: _isInitialized && _awesomeController != null
+          ? Stack(
+              children: [
+                Positioned.fill(
+                  child: awesome.BetterPlayer(
+                    key: _awesomePlayerKey,
+                    controller: _awesomeController!,
+                  ),
+                ),
+                if (_isLoadingVideo)
+                  Positioned.fill(
+                    child: Container(
+                      color: Colors.black.withValues(alpha: 0.55),
+                      child: const Center(
+                        child: CircularProgressIndicator(color: Colors.white),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  child: SafeArea(
+                    child: IconButton(
+                      icon: const Icon(Icons.arrow_back, color: Colors.white),
+                      onPressed: widget.onBackPressed,
+                    ),
+                  ),
+                ),
+              ],
             )
           : const Center(
               child: CircularProgressIndicator(
