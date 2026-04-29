@@ -1,4 +1,4 @@
-name: Build Unsigned IPA
+name: Build Signed IPA
 
 on:
   push:
@@ -22,33 +22,66 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Disable Code Signing
+      - name: Setup iOS Keychain and Provisioning
         run: |
-          sed -i '' 's/DEVELOPMENT_TEAM = [A-Z0-9]*;//g' ios/Runner.xcodeproj/project.pbxproj
-          sed -i '' 's/PROVISIONING_PROFILE_SPECIFIER = [A-Za-z0-9-]*;//g' ios/Runner.xcodeproj/project.pbxproj
-          sed -i '' 's/CODE_SIGN_STYLE = Automatic;//g' ios/Runner.xcodeproj/project.pbxproj
+          # 1. 创建临时钥匙串
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          
+          # 2. 导入 P12 证书
+          security import "证书文件.p12" -P "1" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          
+          # 3. 安装描述文件
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "描述文件.mobileprovision" ~/Library/MobileDevice/Provisioning\ Profiles/
 
-      - name: Build IPA (No codesign)
-        run: flutter build ipa --release --no-codesign
-        env:
-          CODE_SIGNING_ALLOWED: NO
-          CODE_SIGNING_REQUIRED: NO
-          CODE_SIGN_IDENTITY: ""
-
-
-      - name: Create Unsigned IPA
+      - name: Fix Project Settings for Signing
         run: |
-          mkdir -p Payload
-          if [ -d "build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app" ]; then
-            cp -R build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app Payload/
-          else
-            cp -R build/ios/iphoneos/Runner.app Payload/
-          fi
-          zip -r Selene_unsigned.ipa Payload
+          # 强制设置 Team ID 和手动签名模式
+          sed -i '' 's/DEVELOPMENT_TEAM = [A-Z0-9]*;/DEVELOPMENT_TEAM = 3C474Y34QB;/g' ios/Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGN_STYLE = [A-Za-z]*;/CODE_SIGN_STYLE = Manual;/g' ios/Runner.xcodeproj/project.pbxproj
 
+      - name: Generate ExportOptions.plist
+        run: |
+          # 动态提取描述文件的 UUID
+          PROFILE_UUID=$(grep UUID -A1 -a "描述文件.mobileprovision" | grep -io "[-A-Z0-9]\{36\}")
+          echo "Using Provisioning Profile UUID: $PROFILE_UUID"
+          
+          cat <<EOF > ios/ExportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>ad-hoc</string>
+            <key>teamID</key>
+            <string>3C474Y34QB</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>org.moontechlab.selene</key>
+              <string>$PROFILE_UUID</string>
+            </dict>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>iPhone Distribution</string>
+            <key>compileBitcode</key>
+            <false/>
+            <key>thinning</key>
+            <string>&lt;none&gt;</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Build IPA (Signed)
+        run: flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Selene-Unsigned-IPA
-          path: Selene_unsigned.ipa
+          name: Selene-Signed-IPA
+          path: build/ios/ipa/*.ipa
