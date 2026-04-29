@@ -1,4 +1,4 @@
-name: Build Signed IPA
+name: Build Unsigned IPA
 
 on:
   push:
@@ -19,75 +19,42 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Setup iOS Keychain and Provisioning
+      - name: Fix libarclite (Xcode 14+)
         run: |
-          # 1. 创建并解锁钥匙串
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          
-          # 将自定义钥匙串加入搜索列表
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/\"//g')
-          
-          # 2. 导入 P12 证书
-          security import "证书文件.p12" -P "1" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          
-          # 调试：输出可用的身份
-          security find-identity -p codesigning -v
-          
-          # 3. 安装描述文件
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp "描述文件.mobileprovision" ~/Library/MobileDevice/Provisioning\ Profiles/
+          XCODE_PATH=$(xcode-select -p)
+          ARC_DIR="${XCODE_PATH}/Toolchains/XcodeDefault.xctoolchain/usr/lib/arc"
+          if [ ! -f "$ARC_DIR/libarclite_iphoneos.a" ]; then
+            sudo mkdir -p "$ARC_DIR"
+            echo "void dummy_arclite(void) {}" > dummy.c
+            clang -c dummy.c -arch arm64 -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -o dummy_os_arm64.o
+            libtool -static -o libarclite_iphoneos.a dummy_os_arm64.o
+            sudo cp libarclite_iphoneos.a "$ARC_DIR/"
+            rm dummy.c dummy_os_arm64.o libarclite_iphoneos.a
+          fi
 
-      - name: Generate ExportOptions.plist
+      - name: Build Unsigned App
         run: |
-          # 动态提取描述文件的 UUID
-          PROFILE_UUID=$(grep UUID -A1 -a "描述文件.mobileprovision" | grep -io "[-A-Z0-9]\{36\}")
-          echo "Using Provisioning Profile UUID: $PROFILE_UUID"
+          flutter pub get
+          flutter build ios --release --no-codesign --config-only
           
-          cat <<EOF > ios/ExportOptions.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>ad-hoc</string>
-            <key>teamID</key>
-            <string>3C474Y34QB</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>org.moontechlab.selene</key>
-              <string>$PROFILE_UUID</string>
-            </dict>
-            <key>signingStyle</key>
-            <string>manual</string>
-            <key>signingCertificate</key>
-            <string>iPhone Distribution</string>
-            <key>compileBitcode</key>
-            <false/>
-          </dict>
-          </plist>
-          EOF
+          xcodebuild -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER=""
 
-      - name: Build Unsigned Archive
-        run: flutter build ipa --release --no-codesign
-
-      - name: Export and Sign IPA
+      - name: Package Unsigned IPA
         run: |
-          xcodebuild -exportArchive \
-            -archivePath build/ios/archive/Runner.xcarchive \
-            -exportPath build/ios/ipa \
-            -exportOptionsPlist ios/ExportOptions.plist \
-            -allowProvisioningUpdates
-          
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qr Selene_unsigned.ipa Payload/
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Selene-Signed-IPA
-          path: build/ios/ipa/*.ipa
+          name: Selene-Unsigned-IPA
+          path: Selene_unsigned.ipa
