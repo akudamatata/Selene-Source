@@ -24,33 +24,26 @@ jobs:
 
       - name: Setup iOS Keychain and Provisioning
         run: |
-          # 1. 创建临时钥匙串
+          # 1. 创建并解锁钥匙串
           KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
           KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           
-          # 2. 导入 P12 证书并设置分区权限（防止弹出 UI 提示）
+          # 将自定义钥匙串加入搜索列表
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/\"//g')
+          
+          # 2. 导入 P12 证书
           security import "证书文件.p12" -P "1" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
           
-          # 调试：列出可用的签名身份
+          # 调试：输出可用的身份
           security find-identity -p codesigning -v
           
           # 3. 安装描述文件
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           cp "描述文件.mobileprovision" ~/Library/MobileDevice/Provisioning\ Profiles/
-
-      - name: Fix Project Settings for Signing
-        run: |
-          # 强制设置 Team ID 和手动签名模式，并禁用代码签名的严格限制
-          sed -i '' 's/DEVELOPMENT_TEAM = [A-Z0-9]*;/DEVELOPMENT_TEAM = 3C474Y34QB;/g' ios/Runner.xcodeproj/project.pbxproj
-          sed -i '' 's/CODE_SIGN_STYLE = [A-Za-z]*;/CODE_SIGN_STYLE = Manual;/g' ios/Runner.xcodeproj/project.pbxproj
-          # 强制设置签名身份为 iPhone Distribution
-          sed -i '' 's/CODE_SIGN_IDENTITY = "iPhone Developer";/CODE_SIGN_IDENTITY = "iPhone Distribution";/g' ios/Runner.xcodeproj/project.pbxproj
-          sed -i '' 's/CODE_SIGN_IDENTITY\[sdk=iphoneos\*\] = "iPhone Developer";/CODE_SIGN_IDENTITY = "iPhone Distribution";/g' ios/Runner.xcodeproj/project.pbxproj
 
       - name: Generate ExportOptions.plist
         run: |
@@ -78,20 +71,21 @@ jobs:
             <string>iPhone Distribution</string>
             <key>compileBitcode</key>
             <false/>
-            <key>thinning</key>
-            <string>&lt;none&gt;</string>
           </dict>
           </plist>
           EOF
 
-      - name: Build IPA (Signed)
-        run: flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
-        env:
-          CODE_SIGN_IDENTITY: "iPhone Distribution"
-          CODE_SIGNING_REQUIRED: YES
-          CODE_SIGNING_ALLOWED: YES
+      - name: Build Unsigned Archive
+        run: flutter build ipa --release --no-codesign
 
-
+      - name: Export and Sign IPA
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/ios/archive/Runner.xcarchive \
+            -exportPath build/ios/ipa \
+            -exportOptionsPlist ios/ExportOptions.plist \
+            -allowProvisioningUpdates
+          
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
