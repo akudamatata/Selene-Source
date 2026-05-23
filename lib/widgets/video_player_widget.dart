@@ -1,13 +1,14 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:awesome_video_player/awesome_video_player.dart' as awesome;
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:pip/pip.dart';
+import 'package:video_player_pip/index.dart';
 import 'mobile_player_controls.dart';
 import 'pc_player_controls.dart';
 import 'video_player_surface.dart';
+import 'ios_video_player.dart';
 
 class VideoPlayerWidget extends StatefulWidget {
   final VideoPlayerSurface surface;
@@ -25,14 +26,13 @@ class VideoPlayerWidget extends StatefulWidget {
   final int? currentEpisodeIndex;
   final int? totalEpisodes;
   final String? sourceName;
-  final Function(bool isWebFullscreen)? onWebFullscreenChanged;
+  final Function(bool)? onWebFullscreenChanged;
   final VoidCallback? onExitFullScreen;
   final bool live;
-  final Function(bool isPipMode)? onPipModeChanged;
 
   const VideoPlayerWidget({
     super.key,
-    this.surface = VideoPlayerSurface.mobile,
+    this.surface = VideoPlayerSurface.desktop,
     this.url,
     this.headers,
     this.onBackPressed,
@@ -50,7 +50,6 @@ class VideoPlayerWidget extends StatefulWidget {
     this.onWebFullscreenChanged,
     this.onExitFullScreen,
     this.live = false,
-    this.onPipModeChanged,
   });
 
   @override
@@ -58,94 +57,70 @@ class VideoPlayerWidget extends StatefulWidget {
 }
 
 class VideoPlayerWidgetController {
-  VideoPlayerWidgetController._(this._state);
   final _VideoPlayerWidgetState _state;
 
-  Future<void> updateDataSource(
-    String url, {
-    Duration? startAt,
-    Map<String, String>? headers,
-  }) async {
-    await _state._updateDataSource(
-      url,
-      startAt: startAt,
-      headers: headers,
-    );
-  }
-
-  Future<void> seekTo(Duration position) async {
-    if (_state._usesAwesomePlayer) {
-      await _state._awesomeController?.seekTo(position);
-      return;
-    }
-    await _state._player?.seek(position);
-  }
-
-  Duration? get currentPosition {
-    if (_state._usesAwesomePlayer) {
-      return _state._awesomeController?.videoPlayerController?.value.position;
-    }
-    return _state._player?.state.position;
-  }
-
-  Duration? get duration {
-    if (_state._usesAwesomePlayer) {
-      return _state._awesomeController?.videoPlayerController?.value.duration;
-    }
-    return _state._player?.state.duration;
-  }
-
-  bool get isPlaying {
-    if (_state._usesAwesomePlayer) {
-      return _state._awesomeController?.isPlaying() ?? false;
-    }
-    return _state._player?.state.playing ?? false;
-  }
+  VideoPlayerWidgetController._(this._state);
 
   Future<void> pause() async {
-    if (_state._usesAwesomePlayer) {
-      await _state._awesomeController?.pause();
+    if (_state._usesIosPlayer) {
+      await _state._iosController?.pause();
       return;
     }
     await _state._player?.pause();
   }
 
   Future<void> play() async {
-    if (_state._usesAwesomePlayer) {
-      await _state._awesomeController?.play();
+    if (_state._usesIosPlayer) {
+      await _state._iosController?.play();
       return;
     }
     await _state._player?.play();
   }
 
-  void addProgressListener(VoidCallback listener) {
-    _state._addProgressListener(listener);
-  }
-
-  void removeProgressListener(VoidCallback listener) {
-    _state._removeProgressListener(listener);
-  }
-
-  Future<void> setSpeed(double speed) async {
-    await _state._setPlaybackSpeed(speed);
-  }
-
-  double get playbackSpeed => _state._playbackSpeed.value;
-
-  Future<void> setVolume(double volume) async {
-    if (_state._usesAwesomePlayer) {
-      final normalizedVolume = (volume / 100).clamp(0.0, 1.0).toDouble();
-      await _state._awesomeController?.setVolume(normalizedVolume);
+  Future<void> seekTo(Duration position) async {
+    if (_state._usesIosPlayer) {
+      await _state._iosController?.seekTo(position);
       return;
     }
-    await _state._player?.setVolume(volume);
+    await _state._player?.seek(position);
+  }
+
+  Duration? get position {
+    if (_state._usesIosPlayer) {
+      return _state._iosController?.value.position;
+    }
+    return _state._player?.state.position;
+  }
+
+  Duration? get currentPosition => position;
+
+  Duration? get duration {
+    if (_state._usesIosPlayer) {
+      return _state._iosController?.value.duration;
+    }
+    return _state._player?.state.duration;
+  }
+
+  bool get isPlaying {
+    if (_state._usesIosPlayer) {
+      return _state._iosController?.value.isPlaying ?? false;
+    }
+    return _state._player?.state.playing ?? false;
+  }
+
+  Future<void> setVolume(double volume) async {
+    final normalizedVolume = volume.clamp(0.0, 100.0);
+    if (_state._usesIosPlayer) {
+      await _state._iosController?.setVolume(normalizedVolume / 100.0);
+      return;
+    }
+    await _state._player?.setVolume(normalizedVolume);
   }
 
   double? get volume {
-    if (_state._usesAwesomePlayer) {
-      final awesomeVolume =
-          _state._awesomeController?.videoPlayerController?.value.volume;
-      return awesomeVolume == null ? null : awesomeVolume * 100;
+    if (_state._usesIosPlayer) {
+      final vol = _state._iosController?.value.volume;
+      return vol == null ? null : vol * 100;
     }
     return _state._player?.state.volume;
   }
@@ -157,19 +132,34 @@ class VideoPlayerWidgetController {
   Future<void> dispose() async {
     await _state._externalDispose();
   }
+  
+  Future<void> updateDataSource(
+    String url, {
+    Duration? startAt,
+    Map<String, String>? headers,
+  }) async {
+    await _state._updateDataSource(url, startAt: startAt, headers: headers);
+  }
+
+  void addProgressListener(VoidCallback listener) {
+    _state._addProgressListener(listener);
+  }
+
+  void removeProgressListener(VoidCallback listener) {
+    _state._removeProgressListener(listener);
+  }
 
   bool get isPipMode => _state._isPipMode;
 }
 
 class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     with WidgetsBindingObserver {
-  bool get _usesAwesomePlayer => Platform.isIOS;
+  bool get _usesIosPlayer => Platform.isIOS;
 
   Player? _player;
   VideoController? _videoController;
-  awesome.BetterPlayerController? _awesomeController;
-  final GlobalKey<State<StatefulWidget>> _awesomePlayerKey =
-      GlobalKey<State<StatefulWidget>>();
+  VideoPlayerController? _iosController;
+  
   bool _isInitialized = false;
   bool _hasCompleted = false;
   bool _isLoadingVideo = false;
@@ -180,9 +170,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
   StreamSubscription<bool>? _playingSubscription;
   StreamSubscription<bool>? _completedSubscription;
   StreamSubscription<Duration>? _durationSubscription;
-  Timer? _awesomeProgressTimer;
-  Duration? _pendingAwesomeStartAt;
-  bool _awesomeReadyNotified = false;
+  
   final ValueNotifier<double> _playbackSpeed = ValueNotifier<double>(1.0);
   bool _playerDisposed = false;
   VoidCallback? _exitWebFullscreenCallback;
@@ -196,7 +184,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     _currentUrl = widget.url;
     _currentHeaders = widget.headers;
     _initializePlayer();
-    if (!_usesAwesomePlayer) {
+    if (!_usesIosPlayer) {
       _setupPip();
       _registerPipObserver();
     }
@@ -210,18 +198,20 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
       _currentHeaders = widget.headers;
     }
     if (widget.url != oldWidget.url && widget.url != null) {
-      unawaited(_updateDataSource(widget.url!));
+      _updateDataSource(widget.url!);
     }
   }
 
   Future<void> _initializePlayer() async {
-    if (_playerDisposed) {
+    if (_playerDisposed) return;
+    
+    if (_usesIosPlayer) {
+      setState(() {
+        _isInitialized = true;
+      });
       return;
     }
-    if (_usesAwesomePlayer) {
-      _initializeAwesomePlayer();
-      return;
-    }
+    
     _player = Player();
     _videoController = VideoController(_player!);
     _setupPlayerListeners();
@@ -233,57 +223,9 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     });
   }
 
-  void _initializeAwesomePlayer({Duration? startAt}) {
-    _awesomeController = awesome.BetterPlayerController(
-      awesome.BetterPlayerConfiguration(
-        aspectRatio: 16 / 9,
-        autoPlay: true,
-        fit: BoxFit.contain,
-        handleLifecycle: false,
-        autoDispose: false,
-        allowedScreenSleep: false,
-        eventListener: _handleAwesomePlayerEvent,
-        controlsConfiguration: awesome.BetterPlayerControlsConfiguration(
-          controlBarColor: Colors.black.withValues(alpha: 0.75),
-          iconsColor: Colors.white,
-          textColor: Colors.white,
-          progressBarPlayedColor: Colors.red,
-          progressBarHandleColor: Colors.red,
-          progressBarBufferedColor: Colors.white70,
-          progressBarBackgroundColor: Colors.white38,
-          enablePip: true,
-          enablePlaybackSpeed: !widget.live,
-          enableSkips: !widget.live,
-          enableProgressText: !widget.live,
-          enableProgressBar: !widget.live,
-          enableProgressBarDrag: !widget.live,
-          enableQualities: true,
-          enableSubtitles: true,
-          enableAudioTracks: true,
-          enableOverflowMenu: true,
-          backgroundColor: Colors.black,
-          loadingColor: Colors.white,
-        ),
-      ),
-    );
-    _startAwesomeProgressTimer();
-    if (_currentUrl != null) {
-      unawaited(_openCurrentMedia(startAt: startAt));
-    }
-    if (mounted) {
-      setState(() {
-        _isInitialized = true;
-      });
-    } else {
-      _isInitialized = true;
-    }
-  }
-
   Future<void> _openCurrentMedia({Duration? startAt}) async {
-    if (_usesAwesomePlayer) {
-      await _openAwesomeMedia(startAt: startAt);
-      return;
-    }
+    if (_usesIosPlayer) return; // ios player handles its own open
+    
     if (_playerDisposed || _player == null || _currentUrl == null) {
       return;
     }
@@ -302,9 +244,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
       await _player!.setRate(_playbackSpeed.value);
       setState(() {
         _hasCompleted = false;
-        // _isLoadingVideo = false;
       });
-      // widget.onReady?.call();
     } catch (error) {
       debugPrint('VideoPlayerWidget: failed to open media $error');
       if (mounted) {
@@ -316,9 +256,8 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
   }
 
   void _setupPlayerListeners() {
-    if (_player == null) {
-      return;
-    }
+    if (_player == null) return;
+    
     _positionSubscription?.cancel();
     _playingSubscription?.cancel();
     _completedSubscription?.cancel();
@@ -382,20 +321,14 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     Duration? startAt,
     Map<String, String>? headers,
   }) async {
-    if (_playerDisposed) {
-      return;
-    }
+    if (_playerDisposed) return;
     _currentUrl = url;
     if (headers != null) {
       _currentHeaders = headers;
     }
 
-    if (_usesAwesomePlayer) {
-      if (_awesomeController == null) {
-        _initializeAwesomePlayer(startAt: startAt);
-        return;
-      }
-      await _openAwesomeMedia(startAt: startAt);
+    if (_usesIosPlayer) {
+      setState(() {}); // IosVideoPlayer handles didUpdateWidget
       return;
     }
 
@@ -423,10 +356,8 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
       if (mounted) {
         setState(() {
           _hasCompleted = false;
-          // _isLoadingVideo = false;
         });
       }
-      // widget.onReady?.call();
     } catch (error) {
       debugPrint('VideoPlayerWidget: error while changing source $error');
       if (mounted) {
@@ -449,146 +380,30 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
 
   void _notifyProgressListeners() {
     for (final listener in List<VoidCallback>.from(_progressListeners)) {
-      try {
-        listener();
-      } catch (error) {
-        debugPrint('VideoPlayerWidget: progress listener error $error');
-      }
+      listener();
     }
   }
 
   Future<void> _setPlaybackSpeed(double speed) async {
     _playbackSpeed.value = speed;
-    if (_usesAwesomePlayer) {
-      await _awesomeController?.setSpeed(speed);
+    if (_usesIosPlayer) {
+      await _iosController?.setPlaybackSpeed(speed);
       return;
     }
-    await _player?.setRate(speed);
-  }
-
-  Future<void> _openAwesomeMedia({Duration? startAt}) async {
-    if (_playerDisposed || _awesomeController == null || _currentUrl == null) {
-      return;
+    if (_player != null) {
+      await _player!.setRate(speed);
     }
-    if (mounted) {
-      setState(() {
-        _isLoadingVideo = true;
-      });
-    } else {
-      _isLoadingVideo = true;
-    }
-    _hasCompleted = false;
-    _awesomeReadyNotified = false;
-    _pendingAwesomeStartAt = startAt;
-
-    try {
-      await _awesomeController!.setupDataSource(
-        awesome.BetterPlayerDataSource.network(
-          _currentUrl!,
-          liveStream: widget.live,
-          headers: _currentHeaders ?? const <String, String>{},
-          notificationConfiguration:
-              const awesome.BetterPlayerNotificationConfiguration(
-            showNotification: false,
-          ),
-        ),
-      );
-      await _awesomeController!.setSpeed(_playbackSpeed.value);
-      await _awesomeController!.play();
-    } catch (error) {
-      debugPrint('VideoPlayerWidget: failed to open awesome media $error');
-      if (mounted) {
-        setState(() {
-          _isLoadingVideo = false;
-        });
-      } else {
-        _isLoadingVideo = false;
-      }
-    }
-  }
-
-  void _handleAwesomePlayerEvent(awesome.BetterPlayerEvent event) {
-    final type = event.betterPlayerEventType;
-    if (type == awesome.BetterPlayerEventType.initialized) {
-      _handleAwesomeReady();
-    } else if (type == awesome.BetterPlayerEventType.progress) {
-      _notifyProgressListeners();
-    } else if (type == awesome.BetterPlayerEventType.pause) {
-      widget.onPause?.call();
-    } else if (type == awesome.BetterPlayerEventType.finished) {
-      if (!widget.live && !_hasCompleted) {
-        _hasCompleted = true;
-        widget.onVideoCompleted?.call();
-      }
-    } else if (type == awesome.BetterPlayerEventType.pipStart) {
-      _setPipMode(true);
-    } else if (type == awesome.BetterPlayerEventType.pipStop) {
-      _setPipMode(false);
-    } else if (type == awesome.BetterPlayerEventType.openFullscreen) {
-      widget.onWebFullscreenChanged?.call(true);
-    } else if (type == awesome.BetterPlayerEventType.hideFullscreen) {
-      widget.onWebFullscreenChanged?.call(false);
-      widget.onExitFullScreen?.call();
-    } else if (type == awesome.BetterPlayerEventType.exception) {
-      if (mounted) {
-        setState(() {
-          _isLoadingVideo = false;
-        });
-      } else {
-        _isLoadingVideo = false;
-      }
-    }
-  }
-
-  void _handleAwesomeReady() {
-    if (!mounted || _playerDisposed) {
-      return;
-    }
-    setState(() {
-      _isLoadingVideo = false;
-      _hasCompleted = false;
-      _isInitialized = true;
-    });
-
-    final startAt = _pendingAwesomeStartAt;
-    _pendingAwesomeStartAt = null;
-    if (startAt != null && startAt > Duration.zero) {
-      unawaited(_awesomeController?.seekTo(startAt));
-    }
-    if (!_awesomeReadyNotified) {
-      _awesomeReadyNotified = true;
-      widget.onReady?.call();
-    }
-  }
-
-  void _startAwesomeProgressTimer() {
-    _awesomeProgressTimer?.cancel();
-    _awesomeProgressTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!_playerDisposed && _awesomeController != null) {
-        _notifyProgressListeners();
-      }
-    });
-  }
-
-  void _setPipMode(bool isPipMode) {
-    if (mounted) {
-      setState(() {
-        _isPipMode = isPipMode;
-      });
-    } else {
-      _isPipMode = isPipMode;
-    }
-    widget.onPipModeChanged?.call(isPipMode);
   }
 
   void _exitWebFullscreen() {
     _exitWebFullscreenCallback?.call();
   }
 
+  Future<void> _externalDispose() async {
+    _disposePlayer();
+  }
+
   void _setupPip() {
-    if (!Platform.isAndroid && !Platform.isIOS) {
-      return;
-    }
     _pip.setup(const PipOptions(
       autoEnterEnabled: true,
       aspectRatioX: 16,
@@ -600,84 +415,41 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
   }
 
   void _registerPipObserver() {
-    if (!Platform.isAndroid && !Platform.isIOS) {
-      return;
-    }
     _pip.registerStateChangedObserver(PipStateChangedObserver(
-      onPipStateChanged: (state, error) {
+      onPipStateChanged: (PipState state, String? error) {
         if (!mounted) return;
-        switch (state) {
-          case PipState.pipStateStarted:
-            debugPrint('PiP started successfully');
-            if (mounted) {
-              setState(() => _isPipMode = true);
-              widget.onPipModeChanged?.call(true);
-            }
-            break;
-          case PipState.pipStateStopped:
-            debugPrint('PiP stopped');
-            if (mounted) {
-              setState(() {
-                _isPipMode = false;
-              });
-              widget.onPipModeChanged?.call(false);
-            }
-            break;
-          case PipState.pipStateFailed:
-            debugPrint('PiP failed: $error');
-            if (mounted) {
-              setState(() => _isPipMode = false);
-              widget.onPipModeChanged?.call(false);
-            }
-            break;
-        }
+        setState(() {
+          _isPipMode = state == PipState.pipStateStarted;
+        });
+        debugPrint("Pip mode changed: ${state == PipState.pipStateStarted}");
       },
     ));
   }
 
   Future<void> _enterPipMode() async {
-    debugPrint('_enterPipMode');
-    try {
-      if (_usesAwesomePlayer) {
-        await _awesomeController?.play();
-        await _awesomeController?.enablePictureInPicture(_awesomePlayerKey);
-        return;
+    if (_usesIosPlayer) {
+      // Handled internally by IosVideoPlayer
+      return;
+    }
+    
+    if (Platform.isAndroid) {
+      final pipAvailable = await _pip.isSupported();
+      if (pipAvailable) {
+        debugPrint('Entering pip mode');
+        _pip.start();
+      } else {
+        debugPrint('Pip mode is not supported');
       }
-      var support = await _pip.isSupported();
-      if (!support) {
-        debugPrint('Device does not support PiP!');
-        return;
-      }
-      await _player?.play();
-      await _pip.start();
-    } catch (e) {
-      debugPrint('Failed to enter PiP mode: $e');
-      _setupPip();
     }
   }
 
-  Future<void> _externalDispose() async {
-    if (!mounted || _playerDisposed) {
-      return;
-    }
-    await _disposePlayer();
-  }
-
-  Future<void> _disposePlayer() async {
-    if (_playerDisposed) {
-      return;
-    }
+  void _disposePlayer() {
     _playerDisposed = true;
     _positionSubscription?.cancel();
     _playingSubscription?.cancel();
     _completedSubscription?.cancel();
     _durationSubscription?.cancel();
-    _awesomeProgressTimer?.cancel();
-    _progressListeners.clear();
-    _awesomeController?.removeEventsListener(_handleAwesomePlayerEvent);
-    _awesomeController?.dispose(forceDispose: true);
-    _awesomeController = null;
-    await _player?.dispose();
+    _player?.dispose();
     _player = null;
     _videoController = null;
   }
@@ -685,25 +457,15 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if (_player == null) {
+    if (_player == null && _iosController == null) {
       return;
-    }
-    switch (state) {
-      case AppLifecycleState.paused:
-      case AppLifecycleState.inactive:
-      case AppLifecycleState.hidden:
-        break;
-      case AppLifecycleState.resumed:
-        break;
-      case AppLifecycleState.detached:
-        break;
     }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    if (!_usesAwesomePlayer && Platform.isAndroid) {
+    if (!_usesIosPlayer && Platform.isAndroid) {
       _pip.unregisterStateChangedObserver();
       _pip.dispose();
     }
@@ -714,8 +476,28 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
 
   @override
   Widget build(BuildContext context) {
-    if (_usesAwesomePlayer) {
-      return _buildAwesomePlayer();
+    if (_usesIosPlayer) {
+      return Container(
+        color: Colors.black,
+        child: IosVideoPlayer(
+          url: _currentUrl ?? '',
+          headers: _currentHeaders,
+          live: widget.live,
+          onBackPressed: widget.onBackPressed,
+          onReady: widget.onReady,
+          onVideoCompleted: widget.onVideoCompleted,
+          onFullscreenChanged: widget.onWebFullscreenChanged,
+          onControllerCreated: (controller) {
+            _iosController = controller;
+            _addProgressListener(() {
+               if (mounted) setState(() {});
+            });
+            controller.addListener(() {
+               _notifyProgressListeners();
+            });
+          },
+        ),
+      );
     }
     return Container(
       color: Colors.black,
@@ -771,47 +553,6 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
                         isPipMode: _isPipMode,
                       );
               },
-            )
-          : const Center(
-              child: CircularProgressIndicator(
-                color: Colors.white,
-              ),
-            ),
-    );
-  }
-
-  Widget _buildAwesomePlayer() {
-    return Container(
-      color: Colors.black,
-      child: _isInitialized && _awesomeController != null
-          ? Stack(
-              children: [
-                Positioned.fill(
-                  child: awesome.BetterPlayer(
-                    key: _awesomePlayerKey,
-                    controller: _awesomeController!,
-                  ),
-                ),
-                if (_isLoadingVideo)
-                  Positioned.fill(
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.55),
-                      child: const Center(
-                        child: CircularProgressIndicator(color: Colors.white),
-                      ),
-                    ),
-                  ),
-                Positioned(
-                  top: 8,
-                  left: 8,
-                  child: SafeArea(
-                    child: IconButton(
-                      icon: const Icon(Icons.arrow_back, color: Colors.white),
-                      onPressed: widget.onBackPressed,
-                    ),
-                  ),
-                ),
-              ],
             )
           : const Center(
               child: CircularProgressIndicator(
