@@ -111,7 +111,7 @@ class ApiService {
       await UserDataService.clearUserData();
 
       // 跳转到登录页
-      if (context != null) {
+      if (context != null && context.mounted) {
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(builder: (context) => const LoginScreen()),
           (route) => false,

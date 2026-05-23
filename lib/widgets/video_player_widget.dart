@@ -173,6 +173,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
   
   final ValueNotifier<double> _playbackSpeed = ValueNotifier<double>(1.0);
   bool _playerDisposed = false;
+  int _updateSessionId = 0;
   VoidCallback? _exitWebFullscreenCallback;
   final Pip _pip = Pip();
   bool _isPipMode = false;
@@ -229,6 +230,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     if (_playerDisposed || _player == null || _currentUrl == null) {
       return;
     }
+    final sessionId = ++_updateSessionId;
     setState(() {
       _isLoadingVideo = true;
     });
@@ -241,10 +243,13 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
         ),
         play: true,
       );
+      if (_playerDisposed || _player == null || _updateSessionId != sessionId) return;
       await _player!.setRate(_playbackSpeed.value);
-      setState(() {
-        _hasCompleted = false;
-      });
+      if (mounted) {
+        setState(() {
+          _hasCompleted = false;
+        });
+      }
     } catch (error) {
       debugPrint('VideoPlayerWidget: failed to open media $error');
       if (mounted) {
@@ -337,6 +342,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
       return;
     }
 
+    final sessionId = ++_updateSessionId;
     setState(() {
       _isLoadingVideo = true;
     });
@@ -351,6 +357,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
         ),
         play: true,
       );
+      if (_playerDisposed || _player == null || _updateSessionId != sessionId) return;
       _playbackSpeed.value = currentSpeed;
       await _player!.setRate(currentSpeed);
       if (mounted) {
