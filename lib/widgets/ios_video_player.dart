@@ -58,6 +58,7 @@ class _IosVideoPlayerState extends State<IosVideoPlayer> {
     final controller = VideoPlayerController.networkUrl(
       Uri.parse(widget.url),
       httpHeaders: widget.headers ?? const <String, String>{},
+      videoPlayerOptions: VideoPlayerOptions(allowBackgroundPlayback: true, mixWithOthers: true),
     );
     _controller = controller;
 
@@ -328,7 +329,7 @@ class _IosVideoPlayerState extends State<IosVideoPlayer> {
                           // Bottom Progress Bar
                           if (!widget.live)
                             Positioned(
-                              bottom: 8,
+                              bottom: 0,
                               left: 16,
                               right: 16,
                               child: Row(
