@@ -80,9 +80,26 @@ class _IosVideoPlayerState extends State<IosVideoPlayer> {
       setState(() {});
       widget.onReady?.call();
       
-      // Setup Auto PiP
-      VideoPlayerPip.enableAutoPip(_controller!);
+      // Setup Auto PiP with retry mechanism since native layer might not be ready yet
+      _setupAutoPip();
     }
+  }
+
+  void _setupAutoPip() {
+    int retries = 0;
+    Timer.periodic(const Duration(milliseconds: 500), (timer) async {
+      if (_isDisposed || _controller == null) {
+        timer.cancel();
+        return;
+      }
+      
+      final success = await VideoPlayerPip.enableAutoPip(_controller!);
+      if (success || retries > 10) {
+        timer.cancel();
+        debugPrint(success ? "Auto PiP enabled successfully" : "Failed to enable Auto PiP after retries");
+      }
+      retries++;
+    });
   }
 
   void _videoListener() {
