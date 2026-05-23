@@ -270,13 +270,14 @@ class SSESearchService {
     _buffer = '';
 
     // 使用流式 UTF-8 解码器，自动处理跨 chunk 的多字节字符
-    final utf8Decoder = const Utf8Decoder(allowMalformed: false);
+    final utf8Decoder = const Utf8Decoder(allowMalformed: true);
 
     // 流式处理 SSE 数据
-    await for (final chunk in response.stream.transform(utf8Decoder)) {
-      try {
-        // 将新数据添加到缓冲区
-        _buffer += chunk;
+    try {
+      await for (final chunk in response.stream.transform(utf8Decoder)) {
+        try {
+          // 将新数据添加到缓冲区
+          _buffer += chunk;
 
         // 按行分割并处理
         final lines = _buffer.split('\n');
@@ -300,6 +301,9 @@ class SSESearchService {
         // 如果解码失败，尝试跳过这个块
         continue;
       }
+    }
+    } catch (streamError) {
+      _errorController?.add('SSE流读取异常: ${streamError.toString()}');
     }
   }
 

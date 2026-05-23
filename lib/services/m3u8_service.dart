@@ -193,8 +193,8 @@ class M3U8Service {
   /// 测量下载速度
   Future<double> _measureDownloadSpeed(List<String> segments) async {
     try {
-      // 使用前3个片段进行测速
-      final segmentsToTest = segments.take(3).toList();
+      // 仅使用1个片段进行测速，避免 OOM 和过多并发
+      final segmentsToTest = segments.take(1).toList();
       
       final stopwatch = Stopwatch()..start();
       int totalBytes = 0;
@@ -273,38 +273,45 @@ class M3U8Service {
       testUrls[sourceId] = episodeUrl;
     }
     
-    // 并发获取所有源的流信息
-    final futures = testUrls.entries.map((entry) async {
-      final sourceId = entry.key;
-      final episodeUrl = entry.value;
-      
-      try {
-        final streamInfo = await getStreamInfo(episodeUrl).timeout(
-          const Duration(seconds: 5),
-          onTimeout: () {
-            return {
-              'resolution': {'width': 0, 'height': 0},
-              'downloadSpeed': 0.0,
-              'latency': 0,
-              'success': false,
-              'error': '获取流信息超时',
-            };
-          },
-        );
-        return MapEntry(sourceId, streamInfo);
-      } catch (e) {
-        return MapEntry(sourceId, {
-          'resolution': {'width': 0, 'height': 0},
-          'downloadSpeed': 0.0,
-          'latency': 0,
-          'success': false,
-          'error': e.toString(),
-        });
-      }
-    });
+    // 使用批处理限制并发，避免发起数百个并发网络请求导致 Android OOM 或连接崩溃
+    final results = <MapEntry<String, Map<String, dynamic>>>[];
+    final entries = testUrls.entries.toList();
+    const batchSize = 4;
     
-    // 等待所有流信息获取完成
-    final results = await Future.wait(futures);
+    for (int i = 0; i < entries.length; i += batchSize) {
+      final batch = entries.skip(i).take(batchSize);
+      final futures = batch.map((entry) async {
+        final sourceId = entry.key;
+        final episodeUrl = entry.value;
+        
+        try {
+          final streamInfo = await getStreamInfo(episodeUrl).timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              return {
+                'resolution': {'width': 0, 'height': 0},
+                'downloadSpeed': 0.0,
+                'latency': 0,
+                'success': false,
+                'error': '获取流信息超时',
+              };
+            },
+          );
+          return MapEntry(sourceId, streamInfo);
+        } catch (e) {
+          return MapEntry(sourceId, {
+            'resolution': {'width': 0, 'height': 0},
+            'downloadSpeed': 0.0,
+            'latency': 0,
+            'success': false,
+            'error': e.toString(),
+          });
+        }
+      });
+      
+      final batchResults = await Future.wait(futures);
+      results.addAll(batchResults);
+    }
     final streamInfoResults = <String, Map<String, dynamic>>{};
     for (final result in results) {
       streamInfoResults[result.key] = result.value;
@@ -518,43 +525,53 @@ class M3U8Service {
       testUrls[sourceId] = episodeUrl;
     }
     
-    // 创建并发测速任务
-    final futures = testUrls.entries.map((entry) async {
-      final sourceId = entry.key;
-      final episodeUrl = entry.value;
-      
-      try {
-        final streamInfo = await getStreamInfo(episodeUrl).timeout(
-          timeout,
-          onTimeout: () {
-            return {
-              'resolution': {'width': 0, 'height': 0},
-              'downloadSpeed': 0.0,
-              'latency': 0,
-              'success': false,
-              'error': '获取流信息超时',
-            };
-          },
-        );
+    // 限制测速并发，分批测速
+    final entries = testUrls.entries.toList();
+    const batchSize = 3;
+    
+    for (int i = 0; i < entries.length; i += batchSize) {
+      final batch = entries.skip(i).take(batchSize);
+      final futures = batch.map((entry) async {
+        final sourceId = entry.key;
+        final episodeUrl = entry.value;
         
-        if (streamInfo['success']) {
-          final downloadSpeed = streamInfo['downloadSpeed'] as double;
-          final latency = streamInfo['latency'] as int;
-          final resolutionData = streamInfo['resolution'] as Map<String, int>;
+        try {
+          final streamInfo = await getStreamInfo(episodeUrl).timeout(
+            timeout,
+            onTimeout: () {
+              return {
+                'resolution': {'width': 0, 'height': 0},
+                'downloadSpeed': 0.0,
+                'latency': 0,
+                'success': false,
+                'error': '获取流信息超时',
+              };
+            },
+          );
           
-          // 转换分辨率为标准格式
-          final resolution = _convertResolutionToString(resolutionData);
-          
-          final speedData = {
-            'quality': resolution,
-            'loadSpeed': _formatDownloadSpeed(downloadSpeed),
-            'pingTime': '${latency}ms',
-          };
-          
-          // 实时回调结果
-          onSourceCompleted(sourceId, speedData);
-        } else {
-          // 测速失败的情况
+          if (streamInfo['success']) {
+            final downloadSpeed = streamInfo['downloadSpeed'] as double;
+            final latency = streamInfo['latency'] as int;
+            final resolutionData = streamInfo['resolution'] as Map<String, int>;
+            
+            final resolution = _convertResolutionToString(resolutionData);
+            
+            final speedData = {
+              'quality': resolution,
+              'loadSpeed': _formatDownloadSpeed(downloadSpeed),
+              'pingTime': '${latency}ms',
+            };
+            
+            onSourceCompleted(sourceId, speedData);
+          } else {
+            final speedData = {
+              'quality': '未知',
+              'loadSpeed': '超时',
+              'pingTime': '超时',
+            };
+            onSourceCompleted(sourceId, speedData);
+          }
+        } catch (e) {
           final speedData = {
             'quality': '未知',
             'loadSpeed': '超时',
@@ -562,19 +579,10 @@ class M3U8Service {
           };
           onSourceCompleted(sourceId, speedData);
         }
-      } catch (e) {
-        // 异常情况
-        final speedData = {
-          'quality': '未知',
-          'loadSpeed': '超时',
-          'pingTime': '超时',
-        };
-        onSourceCompleted(sourceId, speedData);
-      }
-    });
-    
-    // 并发执行所有测速任务，每个任务完成后会立即触发回调
-    await Future.wait(futures);
+      });
+      
+      await Future.wait(futures);
+    }
   }
 
   /// 释放资源
