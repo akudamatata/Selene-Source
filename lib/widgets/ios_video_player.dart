@@ -55,25 +55,35 @@ class _IosVideoPlayerState extends State<IosVideoPlayer> {
   }
 
   Future<void> _initializePlayer() async {
-    _controller = VideoPlayerController.networkUrl(
+    final controller = VideoPlayerController.networkUrl(
       Uri.parse(widget.url),
       httpHeaders: widget.headers ?? const <String, String>{},
     );
+    _controller = controller;
 
-    widget.onControllerCreated(_controller!);
+    widget.onControllerCreated(controller);
 
-    await _controller!.initialize();
-
-    if (_isDisposed) return;
-
-    if (widget.startAt != null) {
-      await _controller!.seekTo(widget.startAt!);
+    try {
+      await controller.initialize();
+    } catch (e) {
+      debugPrint("iOS VideoPlayer initialization failed: $e");
     }
 
-    _controller!.addListener(_videoListener);
+    if (_isDisposed || _controller != controller) return;
+
+    if (widget.startAt != null) {
+      await controller.seekTo(widget.startAt!);
+    }
+
+    if (_isDisposed || _controller != controller) return;
+
+    controller.addListener(_videoListener);
     
     // Auto play
-    await _controller!.play();
+    await controller.play();
+    
+    if (_isDisposed || _controller != controller) return;
+    
     _startHideTimer();
 
     if (mounted) {
